@@ -33,8 +33,6 @@ def Proxy(port, fake_ip, server_ip):
             serverSocket.close()
         if connectionSocket:
             connectionSocket.close()
-        if ListenSocket:
-            ListenSocket.close()
 
 def FindMes(message):
     result = ''
