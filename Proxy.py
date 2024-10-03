@@ -40,7 +40,7 @@ def Proxy(port, fake_ip, server_ip):
 
 def FindMes(message):
     result = ""
-    if '\n' in message:
+    if b'\n' in message:
         for i in message:
             result += i
             if i == '\n':
