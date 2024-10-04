@@ -1,51 +1,54 @@
+#!/usr/bin/env python3.10
 from socket import*
 import sys
 
 def Proxy(port, fake_ip, server_ip):
+## listen from the client
     ListenSocket = socket(AF_INET, SOCK_STREAM)
     ListenSocket.bind(('', port))
     ListenSocket.listen(1)
     print("Proxy is ready to receive on ", port)
 
     while True:
-
-        connectionSocket, addr = ListenSocket.accept()
-        print(f"Connection established with {addr}")
-
-        primemessage = connectionSocket.recv(2048)
-        decoded = primemessage.decode()
         try:
-            message = FindMes(decoded)
-        except Exception as e:
-            print("message is not complete.")
+            connectionSocket, addr = ListenSocket.accept()
+            primemessage = connectionSocket.recv(2048)
+            decoded = primemessage.decode()
+            check = Verify(decoded)
+        
+            if check:
+                ## send the message to server if message is valid(ie.has EMO)
+                serverSocket = socket(AF_INET, SOCK_STREAM)
+                serverSocket.bind((fake_ip, 0))
 
-        print("Received Message from Client: ", message)
+                ##close the proxy if server disconnected
+                try:
+                    serverSocket.connect((server_ip, 8080))
+                    serverSocket.send(primemessage)
+                    primeresponse = serverSocket.recv(2048)
+                    connectionSocket.send(primeresponse)
+                except (OSError, ConnectionRefusedError) as e:
+                    ListenSocket.close()
+                    connectionSocket.close()
+                    serverSocket.close()
 
-        encodedm = message.encode()
+            ## not sending the message when it misses '\n'         
+            else:
+                print("message is not complete.")
 
-        serverSocket = socket(AF_INET, SOCK_STREAM)
-        serverSocket.bind((fake_ip, 0))
-        serverSocket.connect((server_ip, 8080))
-        serverSocket.send(encodedm)
-        print("Sending", message, "to Server: 8080")
-
-        primeresponse = serverSocket.recv(2048)
-        print("Received Message from Server: ", primeresponse.decode())
-        connectionSocket.send(primeresponse)
-
+        except (OSError, ConnectionRefusedError) as e:
+            ListenSocket.close()
+            connectionSocket.close()
+        
         if serverSocket:
             serverSocket.close()
         if connectionSocket:
             connectionSocket.close()
 
-def FindMes(message):
-    result = ""
-    if b'\n' in message:
-        for i in message:
-            result += i
-            if i == '\n':
-                break
-    else:
+# to capture only the message before EOM
+def Verify(message):
+    result = True
+    if '\n' not in message:
         result = False
     return result
 
