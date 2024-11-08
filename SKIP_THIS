@@ -1,4 +1,6 @@
-from socket import*
+"""this file is not complete and is a intro model"""
+
+"""from socket import*
 import sys
 
 def Proxy(port, fake_ip, server_ip):
@@ -46,4 +48,4 @@ if __name__ == "__main__":
     port = int(sys.argv[1])
     fake_ip = sys.argv[2]
     server_ip = sys.argv[3]
-    Proxy(port, fake_ip, server_ip)
+    Proxy(port, fake_ip, server_ip)"""
