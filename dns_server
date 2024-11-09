@@ -1,2 +1,159 @@
 #!/usr/bin/env python3.10
 """simple DNS here"""
+
+from socket import *
+import sys
+import time
+import subprocess
+from threading import Thread
+
+server_ips = []
+latencies = {}
+round_robin_count = 0
+DOMAIN_NAME = "video.columbia.edu"
+
+def DNS_Server(client_ip, log_file, port, method):
+    serverSocket = socket(AF_INET, SOCK_DGRAM)
+    serverSocket.bind((client_ip, port))
+
+    while True:
+        try:
+            message, addr = serverSocket.recvfrom(512)
+            client_thread = Thread(target=DNS_Client, args=(serverSocket, message, addr, log_file, method))
+            client_thread.daemon = True
+            client_thread.start()
+        except (OSError, ConnectionRefusedError) as e:
+            print(f"Error handling DNS client: {e}")
+
+def DNS_Client(serverSocket, message, addr, log_file, method):
+    try:
+        transaction_id = b'\x08\x34'
+        domain = message.decode('utf-8').strip()
+        if domain == DOMAIN_NAME:
+            returned_ip = ChooseIp(method)
+            response = GetResponse(transaction_id, domain, returned_ip)
+            Log(log_file, method, returned_ip)
+        else:
+            response = GetErrorResponse(transaction_id)
+        serverSocket.sendto(response, addr)
+    except (OSError, ConnectionRefusedError) as e:
+        print("please restart the DNS server")
+
+
+def GetResponse(transaction_id, domain, returned_ip):
+    """construct the DNS response for query to video.columbia.edu"""
+    # header 
+    flags = int_to_bytes(0x8180, 2)  #AA=1, RD=0, RA=0
+    question_count = int_to_bytes(1,2) #1 question
+    answer_count = int_to_bytes(1,2) #1 answer
+    authority_count = int_to_bytes(0,2) #NSCOUNT=0
+    additional_count = int_to_bytes(0,2) #ARCOUNT=0
+    header = transaction_id + flags + question_count + answer_count + authority_count + additional_count
+
+    # question section
+    question = b''.join((bytes([len(part)]) + part.encode() for part in domain.split('.'))) + b'\x00'
+    question += int_to_bytes(1,2) #QTYPE=1
+    question += int_to_bytes(1,2) #QCLASS=1
+
+    # answer section
+    name_pointer = int_to_bytes(0xc00c,2)
+    answer_type = int_to_bytes(1,2) #TYPE=1
+    answer_class = int_to_bytes(1,2)#CLASS=1
+    ttl = int_to_bytes(0,4) #TTL=0
+    data_length = int_to_bytes(4,2) #IPv4 address
+    answer_data = ip_to_bytes(returned_ip)
+    answer = name_pointer + answer_type + answer_class + ttl + data_length + answer_data
+
+    response = header + question + answer 
+    return response
+
+def int_to_bytes(val, length):
+    """Converts an integer to a byte representation of specified length."""
+    return val.to_bytes(length, byteorder='big')
+
+def ip_to_bytes(ip_address):
+    """Converts an IPv4 address (in string format) to bytes."""
+    return bytes(map(int, ip_address.split('.')))
+
+def ChooseIp(method):
+    global round_robin_count
+    if method == "round-robin":
+        ip = server_ips[round_robin_count%len(server_ips)]
+        round_robin_count += 1
+        return ip
+    elif method == "lowest-latency":
+        return min(latencies, key=latencies.get)
+
+def GetErrorResponse(transaction_id):
+    """DNS response with RCODE=3"""
+    flags = int_to_bytes(0x8183, 2) #QR=1, AA=1, TC=0, RD=0, RA=0, Z=0, RCODE=3
+    question_count = int_to_bytes(1,2) #1 question
+    answer_count = int_to_bytes(0,2) #no answer
+    authority_count = int_to_bytes(0,2) #NSCOUNT=0
+    additional_count = int_to_bytes(0,2) #ARCOUNT=0
+    header = transaction_id + flags + question_count + answer_count + authority_count + additional_count
+
+    #question section
+    question = b''.join((bytes([len(part)]) + part.encode() for part in DOMAIN_NAME.split('.'))) + b'\x00'
+    question += int_to_bytes(1,2) #QTYPE=1
+    question += int_to_bytes(1,2) #QCLASS=1
+
+    #no answer section
+    response = header + question
+    return response
+    
+def GetIps(topo_dir):
+    file_path = f"{topo_dir}/topo.dns"
+    with open (file_path, 'r') as f:
+        ip = f.readline().strip()
+    
+    server_file_path = f"{topo_dir}/topo.servers"
+    with open(server_file_path, 'r') as server:
+        for line in server:
+            server_ip = line.strip()
+            server_ips.append(server_ip)
+            latencies[server_ip] = float(1000.0)
+    return ip
+    
+def GetLatency(log_file):
+    while True:
+        for server_ip in server_ips:
+            try:
+                result = subprocess.run(['ping', '-c', '1', '-W', '1', server_ip], stdout = subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+                if result.returncode == 0:
+                    for line in result.stdout.splitlines():
+                        if "time=" in line:
+                            latency = float(line.split("time=")[1].split()[0])
+                            latencies[server_ip] = latency
+                EndLog(log_file, server_ip, latencies[server_ip])
+            except Exception as e:
+                print(f"measurement failed with{server_ip}: {e}")
+        time.sleep(5)
+
+def Log(log_file, decision_method, returned_ip):
+    log_time = time.time()
+    line = "request-report"
+    result = f"{log_time} {line} {decision_method} {returned_ip}"
+    with open (log_file, 'a') as f:
+        f.write(result)
+        f.flush()
+
+def EndLog(log_file, video_server_ip, latency):
+    log_time = time.time()
+    line = "measurement-report"
+    result = f"{log_time} {line} {video_server_ip} {latency}"
+    with open (log_file, 'a') as f:
+        f.write(result)
+        f.flush()
+
+if __name__ == "__main__":
+    topo_dir = sys.argv[1]
+    log_file = sys.argv[2]
+    listen_port = int(sys.argv[3])
+    decision_method = sys.argv[4]
+    client_ip = GetIps(topo_dir)
+
+    latency_thread = Thread(target = GetLatency, args= (log_file,), daemon=True)
+    latency_thread.start()
+
+    DNS_Server(client_ip, log_file, listen_port, decision_method)
